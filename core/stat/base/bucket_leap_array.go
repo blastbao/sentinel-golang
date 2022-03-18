@@ -111,6 +111,8 @@ func (bla *BucketLeapArray) updateConcurrencyWithTime(now uint64, concurrency in
 }
 
 func (bla *BucketLeapArray) currentBucketWithTime(now uint64) *MetricBucket {
+
+	// ①根据当前时间取 bucket
 	curBucket, err := bla.data.currentBucketOfTime(now, bla)
 	if err != nil {
 		logging.Error(err, "Failed to get current bucket in BucketLeapArray.currentBucketWithTime()", "now", now)

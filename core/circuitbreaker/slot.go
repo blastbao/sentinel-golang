@@ -33,7 +33,7 @@ func (s *Slot) Order() uint32 {
 	return RuleCheckSlotOrder
 }
 
-func (b *Slot) Check(ctx *base.EntryContext) *base.TokenResult {
+func (s *Slot) Check(ctx *base.EntryContext) *base.TokenResult {
 	resource := ctx.Resource.Name()
 	result := ctx.RuleCheckResult
 	if len(resource) == 0 {

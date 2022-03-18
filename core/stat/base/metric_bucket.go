@@ -26,8 +26,11 @@ import (
 // Note that all operations of the MetricBucket are required to be thread-safe.
 type MetricBucket struct {
 	// Value of statistic
+	// 计数数组，可放不同类型
 	counter        [base.MetricEventTotal]int64
+	// 最小RT
 	minRt          int64
+	// 最大并发数
 	maxConcurrency int32
 }
 

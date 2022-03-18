@@ -31,7 +31,7 @@ var (
 type MetricStatSlot struct {
 }
 
-func (s *MetricStatSlot) Order() uint32 {
+func (c *MetricStatSlot) Order() uint32 {
 	return StatSlotOrder
 }
 

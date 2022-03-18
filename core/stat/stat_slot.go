@@ -77,6 +77,7 @@ func (s *Slot) recordPassFor(sn base.StatNode, count uint32) {
 	if sn == nil {
 		return
 	}
+
 	sn.IncreaseConcurrency()
 	sn.AddCount(base.MetricEventPass, int64(count))
 }

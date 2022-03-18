@@ -26,10 +26,13 @@ type Strategy uint32
 
 const (
 	// SlowRequestRatio strategy changes the circuit breaker state based on slow request ratio
+	// 慢请求率
 	SlowRequestRatio Strategy = iota
 	// ErrorRatio strategy changes the circuit breaker state based on error request ratio
+	// 错误率
 	ErrorRatio
 	// ErrorCount strategy changes the circuit breaker state based on error amount
+	// 错误数
 	ErrorCount
 )
 
@@ -47,41 +50,68 @@ func (s Strategy) String() string {
 }
 
 // Rule encompasses the fields of circuit breaking rule.
+//
+// 熔断规则
 type Rule struct {
 	// unique id
 	Id string `json:"id,omitempty"`
 	// resource name
 	Resource string   `json:"resource"`
 	Strategy Strategy `json:"strategy"`
+
 	// RetryTimeoutMs represents recovery timeout (in milliseconds) before the circuit breaker opens.
 	// During the open period, no requests are permitted until the timeout has elapsed.
 	// After that, the circuit breaker will transform to half-open state for trying a few "trial" requests.
+	//
+	// Open -> HalfOpen 的冷却时间
 	RetryTimeoutMs uint32 `json:"retryTimeoutMs"`
+
 	// MinRequestAmount represents the minimum number of requests (in an active statistic time span)
 	// that can trigger circuit breaking.
+	//
+	// 最少请求数
 	MinRequestAmount uint64 `json:"minRequestAmount"`
+
+
 	// StatIntervalMs represents statistic time interval of the internal circuit breaker (in ms).
 	// Currently the statistic interval is collected by sliding window.
+	//
+	// 滑动窗口大小
 	StatIntervalMs uint32 `json:"statIntervalMs"`
+
+
 	// StatSlidingWindowBucketCount represents the bucket count of statistic sliding window.
 	// The statistic will be more precise as the bucket count increases, but the memory cost increases too.
 	// The following must be true — “StatIntervalMs % StatSlidingWindowBucketCount == 0”,
 	// otherwise StatSlidingWindowBucketCount will be replaced by 1.
 	// If it is not set, default value 1 will be used.
+	// 滑动窗口 bucket 数目
 	StatSlidingWindowBucketCount uint32 `json:"statSlidingWindowBucketCount"`
+
+
 	// MaxAllowedRtMs indicates that any invocation whose response time exceeds this value (in ms)
 	// will be recorded as a slow request.
 	// MaxAllowedRtMs only takes effect for SlowRequestRatio strategy
+	//
+	// 慢请求耗时阈值
 	MaxAllowedRtMs uint64 `json:"maxAllowedRtMs"`
+
+
 	// Threshold represents the threshold of circuit breaker.
 	// for SlowRequestRatio, it represents the max slow request ratio
 	// for ErrorRatio, it represents the max error request ratio
 	// for ErrorCount, it represents the max error request count
+	//
+	// 慢请求数目阈值
 	Threshold float64 `json:"threshold"`
+
+
 	//ProbeNum is number of probes required when the circuit breaker is half-open.
 	//when the probe num are set  and circuit breaker in the half-open state.
 	//if err occurs during the probe, the circuit breaker is opened immediately.
 	//otherwise,the circuit breaker is closed only after the number of probes is reached
+	//
+	// 在 HalfOpen 状态试探的请求数，失败请求会导致 CB 回到 Open 状态。
 	ProbeNum uint64 `json:"probeNum"`
 }
 
@@ -95,7 +125,9 @@ func (r *Rule) isStatReusable(newRule *Rule) bool {
 	if newRule == nil {
 		return false
 	}
-	return r.Resource == newRule.Resource && r.Strategy == newRule.Strategy && r.StatIntervalMs == newRule.StatIntervalMs &&
+	return r.Resource == newRule.Resource &&
+		r.Strategy == newRule.Strategy &&
+		r.StatIntervalMs == newRule.StatIntervalMs &&
 		r.StatSlidingWindowBucketCount == newRule.StatSlidingWindowBucketCount
 }
 
@@ -107,8 +139,12 @@ func (r *Rule) isEqualsToBase(newRule *Rule) bool {
 	if newRule == nil {
 		return false
 	}
-	return r.Resource == newRule.Resource && r.Strategy == newRule.Strategy && r.RetryTimeoutMs == newRule.RetryTimeoutMs &&
-		r.MinRequestAmount == newRule.MinRequestAmount && r.StatIntervalMs == newRule.StatIntervalMs && r.StatSlidingWindowBucketCount == newRule.StatSlidingWindowBucketCount
+	return r.Resource == newRule.Resource &&
+		r.Strategy == newRule.Strategy &&
+		r.RetryTimeoutMs == newRule.RetryTimeoutMs &&
+		r.MinRequestAmount == newRule.MinRequestAmount &&
+		r.StatIntervalMs == newRule.StatIntervalMs &&
+		r.StatSlidingWindowBucketCount == newRule.StatSlidingWindowBucketCount
 }
 
 func (r *Rule) isEqualsTo(newRule *Rule) bool {
@@ -129,6 +165,7 @@ func (r *Rule) isEqualsTo(newRule *Rule) bool {
 }
 
 func getRuleStatSlidingWindowBucketCount(r *Rule) uint32 {
+
 	interval := r.StatIntervalMs
 	bucketCount := r.StatSlidingWindowBucketCount
 	if bucketCount == 0 || interval%bucketCount != 0 {

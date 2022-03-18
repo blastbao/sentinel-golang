@@ -113,16 +113,21 @@ type StateChangeListener interface {
 // CircuitBreaker is the basic interface of circuit breaker
 type CircuitBreaker interface {
 	// BoundRule returns the associated circuit breaking rule.
+	// 获取关联的熔断规则
 	BoundRule() *Rule
 	// BoundStat returns the associated statistic data structure.
+	// 获取关联的统计数据
 	BoundStat() interface{}
 	// TryPass acquires permission of an invocation only if it is available at the time of invocation.
+	// 是否可用
 	TryPass(ctx *base.EntryContext) bool
 	// CurrentState returns current state of the circuit breaker.
+	// 获取熔断器状态
 	CurrentState() State
 	// OnRequestComplete record a completed request with the given response time as well as error (if present),
 	// and handle state transformation of the circuit breaker.
 	// OnRequestComplete is called only when a passed invocation finished.
+	// 回调上报，包括 rtt 和 err
 	OnRequestComplete(rtt uint64, err error)
 }
 
@@ -130,17 +135,32 @@ type CircuitBreaker interface {
 // circuitBreakerBase encompasses the common fields of circuit breaker.
 type circuitBreakerBase struct {
 	rule *Rule
+
 	// retryTimeoutMs represents recovery timeout (in milliseconds) before the circuit breaker opens.
 	// During the open period, no requests are permitted until the timeout has elapsed.
 	// After that, the circuit breaker will transform to half-open state for trying a few "trial" requests.
+	//
+	// 从 Open => HalfOpen 的冷却时间
 	retryTimeoutMs uint32
+
 	// nextRetryTimestampMs is the time circuit breaker could probe
+	//
+	//
 	nextRetryTimestampMs uint64
+
 	// probeNumber is the number of probe requests that are allowed to pass when the circuit breaker is half open.
+	//
+	// 探查数目
 	probeNumber uint64
+
 	// curProbeNumber is the real-time probe number.
+	//
+	// 当前探查数
 	curProbeNumber uint64
+
 	// state is the state machine of circuit breaker
+	//
+	// 熔断状态
 	state *State
 }
 
@@ -171,12 +191,15 @@ func (b *circuitBreakerBase) resetCurProbeNum() {
 // fromClosedToOpen updates circuit breaker state machine from closed to open.
 // Return true only if current goroutine successfully accomplished the transformation.
 func (b *circuitBreakerBase) fromClosedToOpen(snapshot interface{}) bool {
+	// 修改状态
 	if b.state.cas(Closed, Open) {
+		// 更新冷却时间
 		b.updateNextRetryTimestamp()
+		// 回调
 		for _, listener := range stateChangeListeners {
 			listener.OnTransformToOpen(Closed, *b.rule, snapshot)
 		}
-
+		// 监控上报
 		stateChangedCounter.Add(float64(1), b.BoundRule().Resource, "Closed", "Open")
 		return true
 	}
@@ -223,7 +246,6 @@ func (b *circuitBreakerBase) fromHalfOpenToOpen(snapshot interface{}) bool {
 		for _, listener := range stateChangeListeners {
 			listener.OnTransformToOpen(HalfOpen, *b.rule, snapshot)
 		}
-
 		stateChangedCounter.Add(float64(1), b.BoundRule().Resource, "HalfOpen", "Open")
 		return true
 	}
@@ -238,7 +260,6 @@ func (b *circuitBreakerBase) fromHalfOpenToClosed() bool {
 		for _, listener := range stateChangeListeners {
 			listener.OnTransformToClosed(HalfOpen, *b.rule)
 		}
-
 		stateChangedCounter.Add(float64(1), b.BoundRule().Resource, "HalfOpen", "Closed")
 		return true
 	}
@@ -246,16 +267,20 @@ func (b *circuitBreakerBase) fromHalfOpenToClosed() bool {
 }
 
 //================================= slowRtCircuitBreaker ====================================
+
 type slowRtCircuitBreaker struct {
 	circuitBreakerBase
-	stat                *slowRequestLeapArray
-	maxAllowedRt        uint64
-	maxSlowRequestRatio float64
-	minRequestAmount    uint64
+
+	stat *slowRequestLeapArray	// 滑动窗口
+
+	maxAllowedRt        uint64  // 慢请求耗时阈值
+	maxSlowRequestRatio float64 // 慢请求率阈值
+	minRequestAmount    uint64  // 最小样本数
 }
 
 func newSlowRtCircuitBreakerWithStat(r *Rule, stat *slowRequestLeapArray) *slowRtCircuitBreaker {
 	return &slowRtCircuitBreaker{
+		// 基类
 		circuitBreakerBase: circuitBreakerBase{
 			rule:                 r,
 			retryTimeoutMs:       r.RetryTimeoutMs,
@@ -273,6 +298,7 @@ func newSlowRtCircuitBreakerWithStat(r *Rule, stat *slowRequestLeapArray) *slowR
 func newSlowRtCircuitBreaker(r *Rule) (*slowRtCircuitBreaker, error) {
 	interval := r.StatIntervalMs
 	bucketCount := getRuleStatSlidingWindowBucketCount(r)
+
 	stat := &slowRequestLeapArray{}
 	leapArray, err := sbase.NewLeapArray(bucketCount, interval, stat)
 	if err != nil {
@@ -294,29 +320,42 @@ func (b *slowRtCircuitBreaker) TryPass(ctx *base.EntryContext) bool {
 		return true
 	} else if curStatus == Open {
 		// switch state to half-open to probe if retry timeout
+		// 已经度过冷却期，将状态转换为 HalfOpen
 		if b.retryTimeoutArrived() && b.fromOpenToHalfOpen(ctx) {
 			return true
 		}
 	} else if curStatus == HalfOpen && b.probeNumber > 0 {
+		// 半开状态
 		return true
 	}
+
+	// 拒绝
 	return false
 }
 
 func (b *slowRtCircuitBreaker) OnRequestComplete(rt uint64, _ error) {
+
 	// add slow and add total
+
+	// 滑动窗口
 	metricStat := b.stat
+
+	// 当前 bucket
 	counter, curErr := metricStat.currentCounter()
 	if curErr != nil {
-		logging.Error(curErr, "Fail to get current counter in slowRtCircuitBreaker#OnRequestComplete().",
-			"rule", b.rule)
+		logging.Error(curErr, "Fail to get current counter in slowRtCircuitBreaker#OnRequestComplete().", "rule", b.rule)
 		return
 	}
+
+	// 延迟过大，增加慢请求计数
 	if rt > b.maxAllowedRt {
 		atomic.AddUint64(&counter.slowCount, 1)
 	}
+
+	// 增加总请求计数
 	atomic.AddUint64(&counter.totalCount, 1)
 
+	// 统计窗口内总请求数、慢请求数
 	slowCount := uint64(0)
 	totalCount := uint64(0)
 	counters := metricStat.allCounter()
@@ -324,16 +363,24 @@ func (b *slowRtCircuitBreaker) OnRequestComplete(rt uint64, _ error) {
 		slowCount += atomic.LoadUint64(&c.slowCount)
 		totalCount += atomic.LoadUint64(&c.totalCount)
 	}
+
+	// 计算慢请求率
 	slowRatio := float64(slowCount) / float64(totalCount)
 
 	// handleStateChange
+	// 状态流转
 	curStatus := b.CurrentState()
 	if curStatus == Open {
+		// 当前为打开状态，不作处理
 		return
 	} else if curStatus == HalfOpen {
+		// 当前为半开状态
+
+		// 如果遇到慢查询，则设置为 Open 状态
 		if rt > b.maxAllowedRt {
 			// fail to probe
 			b.fromHalfOpenToOpen(1.0)
+		// 否则，增加成功探查计数，如果连续成功探查数超过阈值，就恢复为 Close 状态
 		} else {
 			b.addCurProbeNum()
 			if b.probeNumber == 0 || atomic.LoadUint64(&b.curProbeNumber) >= b.probeNumber {
@@ -346,20 +393,29 @@ func (b *slowRtCircuitBreaker) OnRequestComplete(rt uint64, _ error) {
 	}
 
 	// current state is CLOSED
+	//
+	// 当前状态为 Close ，需要根据当前慢请求率决定要不要进入 Open 状态。
+
+	// 采样数是否符合要求
 	if totalCount < b.minRequestAmount {
 		return
 	}
 
+	// 慢请求率超过阈值
 	if slowRatio > b.maxSlowRequestRatio || util.Float64Equals(slowRatio, b.maxSlowRequestRatio) {
+		// 获取最新状态
 		curStatus = b.CurrentState()
 		switch curStatus {
 		case Closed:
+			// 进入 Open 态
 			b.fromClosedToOpen(slowRatio)
 		case HalfOpen:
+			// 进入 Open 态
 			b.fromHalfOpenToOpen(slowRatio)
 		default:
 		}
 	}
+
 	return
 }
 
@@ -369,8 +425,12 @@ func (b *slowRtCircuitBreaker) resetMetric() {
 	}
 }
 
+
+// Bucket
 type slowRequestCounter struct {
+	// 慢请求数
 	slowCount  uint64
+	// 请求总数
 	totalCount uint64
 }
 
@@ -379,10 +439,12 @@ func (c *slowRequestCounter) reset() {
 	atomic.StoreUint64(&c.totalCount, 0)
 }
 
+// 滑动窗口
 type slowRequestLeapArray struct {
 	data *sbase.LeapArray
 }
 
+// NewEmptyBucket 创建一个 bucket
 func (s *slowRequestLeapArray) NewEmptyBucket() interface{} {
 	return &slowRequestCounter{
 		slowCount:  0,
@@ -390,6 +452,7 @@ func (s *slowRequestLeapArray) NewEmptyBucket() interface{} {
 	}
 }
 
+// ResetBucketTo 重置
 func (s *slowRequestLeapArray) ResetBucketTo(bw *sbase.BucketWrap, startTime uint64) *sbase.BucketWrap {
 	atomic.StoreUint64(&bw.BucketStart, startTime)
 	bw.Value.Store(&slowRequestCounter{
@@ -399,6 +462,7 @@ func (s *slowRequestLeapArray) ResetBucketTo(bw *sbase.BucketWrap, startTime uin
 	return bw
 }
 
+// 获取当前 bucket 的 Counter
 func (s *slowRequestLeapArray) currentCounter() (*slowRequestCounter, error) {
 	curBucket, err := s.data.CurrentBucket(s)
 	if err != nil {
@@ -418,6 +482,7 @@ func (s *slowRequestLeapArray) currentCounter() (*slowRequestCounter, error) {
 	return counter, nil
 }
 
+// 获取所有 buckets 的 Counters
 func (s *slowRequestLeapArray) allCounter() []*slowRequestCounter {
 	buckets := s.data.Values()
 	ret := make([]*slowRequestCounter, 0, len(buckets))
